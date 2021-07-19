@@ -171,15 +171,18 @@ def on_shadow_delta_updated(delta):
     # type: (iotshadow.ShadowDeltaUpdatedEvent) -> None
     try:
         print("Received shadow delta event.")
-        if delta.state and (shadow_properties in delta.state):
-            value = delta.state
-            if value is None:
-                print("  Delta reports that '{}' was deleted. Resetting defaults...".format(shadow_properties))
-                change_shadow_value(shadow_properties)
-                return
-            else:
-                print("  Delta reports that desired value is '{}'. Changing local value...".format(value))
-                change_shadow_value(value)
+        print("recieved delta state is {}".format(delta.state))
+        if delta.state:
+            for key in delta.state.keys():
+                if key in shadow_properties.keys():
+                    shadow_properties[key] = delta.state[key]
+                else:
+                    shadow_properties[key] = {}
+                    print("Unknown device value {}...removing".format(key))
+
+            change_shadow_value(shadow_properties)
+            return
+               
         else:
             print("  Delta did not report a change in '{}'".format(shadow_properties))
 
@@ -237,6 +240,7 @@ def set_local_value_due_to_initial_query(reported_value):
 
 def change_shadow_value(value):
     with locked_data.lock:
+        print(value)
         if locked_data.shadow_value == value:
             print("Local value is already '{}'.".format(value))
             return
