@@ -81,67 +81,42 @@ class LockedData:
     def __init__(self):
         self.lock = threading.Lock()
         self.shadow_value = None
+        self.shadow_properties = shadow_properties
         self.disconnect_called = False
         self.request_tokens = set()
 
 locked_data = LockedData()
-"""
-def exit(msg_or_exception):
-    if isinstance(msg_or_exception, Exception):
-        stdErr("Exiting sample due to exception.")
-        traceback.print_exception(msg_or_exception.__class__, msg_or_exception, sys.exc_info()[2])
-    else:
-        print("Exiting sample:", msg_or_exception)
 
-    with locked_data.lock:
-        if not locked_data.disconnect_called:
-            print("Disconnecting...")
-            locked_data.disconnect_called = True
-            future = mqtt_connection.disconnect()
-            future.add_done_callback(on_disconnected)
-
-def on_disconnected(disconnect_future):
-    # type: (Future) -> None
-    print("Disconnected.")
-
-    # Signal that sample is finished
-    is_sample_done.set()
-"""
  
 def on_get_shadow_accepted(response):
     # type: (iotshadow.GetShadowResponse) -> None
     try:
-        with locked_data.lock:
-            # check that this is a response to a request from this session
-            try:
-                locked_data.request_tokens.remove(response.client_token)
-            except KeyError:
-                pStdErr("Ignoring get_shadow_accepted message due to unexpected token.")
-                return
-
-            pStdErr("Finished getting initial shadow state.")
-            if locked_data.shadow_value is not None:
-                pStdErr("Ignoring initial query because a delta event has already been received.")
-                return
-
+        pStdErr("Finished getting initial shadow state.")
+        
         if response.state:
+            print("***")
             if response.state.delta:
-                value = response.state.delta.get(response.state)
-                if value:
-                    pStdErr("  Shadow contains delta value '{}'.".format(value))
-                    change_shadow_value(value)
+                print("Delta is {}".format(response.state.delta))
+                values = response.state.delta
+                print("Values for delta are {}".format(values))
+                if values:
+                    pStdErr("  Shadow contains delta value '{}'.".format(values))
+                    change_shadow_values(values)
                     return
 
             if response.state.reported:
-                value = response.state.reported.get(response.state)
-                if value:
-                    pStdErr("  Shadow contains reported value '{}'.".format(value))
-                    set_local_value_due_to_initial_query(response.state.reported)
+                print("Reported is {}".format(response.state.reported))
+                values = response.state.reported
+                print("Values for reported are {}".format(values))
+                
+                if values:
+                    pStdErr("  Shadow contains reported value '{}'.".format(values))
+                    set_local_value_due_to_initial_query(values)
                     return
-
-        print("  Shadow document lacks '{}' property. Setting defaults...".format(shadow_properties))
-        change_shadow_value(shadow_properties)
-        return
+        else:
+            print("  Shadow document lacks '{}' properties. Setting defaults...".format(locked_data.shadow_properties))
+            change_shadow_values(locked_data.shadow_properties)
+            return
 
     except Exception as e:
         pStdErr(e)
@@ -149,45 +124,40 @@ def on_get_shadow_accepted(response):
 def on_get_shadow_rejected(error):
     # type: (iotshadow.ErrorResponse) -> None
     try:
-        # check that this is a response to a request from this session
-        with locked_data.lock:
-            try:
-                locked_data.request_tokens.remove(error.client_token)
-            except KeyError:
-                print("Ignoring get_shadow_rejected message due to unexpected token.")
-                return
-
         if error.code == 404:
             print("Thing has no shadow document. Creating with defaults...")
-            change_shadow_value(shadow_properties)
+            change_shadow_values(locked_data.shadow_properties)
         else:
             exit("Get request was rejected. code:{} message:'{}'".format(
                 error.code, error.message))
 
     except Exception as e:
-        exit(e)
+        pStdErr("Error {} in on_get_shadow_rejected".format(e))
 
 def on_shadow_delta_updated(delta):
     # type: (iotshadow.ShadowDeltaUpdatedEvent) -> None
     try:
         print("Received shadow delta event.")
         print("recieved delta state is {}".format(delta.state))
+        properties = {}
         if delta.state:
             for key in delta.state.keys():
-                if key in shadow_properties.keys():
-                    shadow_properties[key] = delta.state[key]
+                if key in locked_data.shadow_properties.keys():
+                    locked_data.shadow_properties[key] = delta.state[key]
+                    properties[key] = delta.state[key]
                 else:
-                    shadow_properties[key] = {}
+                    locked_data.shadow_properties[key] = {}
+                    properties[key] = {}
                     print("Unknown device value {}...removing".format(key))
 
-            change_shadow_value(shadow_properties)
+            change_shadow_values(properties)
             return
                
         else:
             print("  Delta did not report a change in '{}'".format(shadow_properties))
 
     except Exception as e:
-        exit(e)
+        pStdErr("Error {} in on_shadow_delta_updated".format(e))
 
 def on_publish_update_shadow(future):
     #type: (Future) -> None
@@ -196,59 +166,48 @@ def on_publish_update_shadow(future):
         print("Update request published.")
     except Exception as e:
         print("Failed to publish update request.")
-        exit(e)
 
 def on_update_shadow_accepted(response):
     # type: (iotshadow.UpdateShadowResponse) -> None
     try:
-        # check that this is a response to a request from this session
-        with locked_data.lock:
-            try:
-                locked_data.request_tokens.remove(response.client_token)
-            except KeyError:
-                print("Ignoring update_shadow_accepted message due to unexpected token.")
-                return
-
         try:
             print("Finished updating reported shadow value to '{}'.".format(response.state.reported)) # type: ignore
         except:
-            exit("Updated shadow is missing the target property.")
+            exit("Updated shadow is missing the target propertie(s).")
 
     except Exception as e:
-        exit(e)
+        pStdErr("Error {} in on_update_shadow_accepted".format(e))
 
 def on_update_shadow_rejected(error):
     # type: (iotshadow.ErrorResponse) -> None
-    try:
-        # check that this is a response to a request from this session
-        with locked_data.lock:
-            try:
-                locked_data.request_tokens.remove(error.client_token)
-            except KeyError:
-                print("Ignoring update_shadow_rejected message due to unexpected token.")
-                return
-
-        exit("Update request was rejected. code:{} message:'{}'".format(
+        pStdErr("Update request was rejected. code:{} message:'{}'".format(
             error.code, error.message))
 
-    except Exception as e:
-        exit(e)
-
-def set_local_value_due_to_initial_query(reported_value):
+def set_local_value_due_to_initial_query(reported_values):
+    pStdErr("Setting initial values in set_local_value_due_to_initial_query")
     with locked_data.lock:
-        locked_data.shadow_value = reported_value
+        values = {}
+        for key in reported_values:
+            if locked_data.shadow_properties[key] != reported_values[key]:
+                values[key] = reported_values[key]
+        if values:
+            change_shadow_values(values)
 
-def change_shadow_value(value):
+def change_shadow_values(values):
     with locked_data.lock:
-        print(value)
-        if locked_data.shadow_value == value:
-            print("Local value is already '{}'.".format(value))
+        newValues = {}
+        for key in values:
+            if locked_data.shadow_properties[key] == values[key]:
+                print("Local value is already '{}'.".format(values[key]))
+            else:
+                print("Changed local shadow value to '{}'.".format(values[key]))
+                newValues[key] = values[key]
+                locked_data.shadow_properties[key] = values[key]
+
+        if not newValues:
             return
 
-        print("Changed local shadow value to '{}'.".format(value))
-        locked_data.shadow_value = value
-
-        print("Updating reported shadow value to '{}'...".format(value))
+        print("Updating reported shadow value to '{}'...".format(values))
 
         # use a unique token so we can correlate this "request" message to
         # any "response" messages received on the /accepted and /rejected topics
@@ -257,8 +216,8 @@ def change_shadow_value(value):
         request = iotshadow.UpdateShadowRequest(
             thing_name=thing_name,
             state=iotshadow.ShadowState(
-                reported=shadow_properties,
-                desired=shadow_properties,
+                reported=newValues,
+                desired=newValues
             ),
             client_token=token,
         )
@@ -267,42 +226,16 @@ def change_shadow_value(value):
         locked_data.request_tokens.add(token)
 
         future.add_done_callback(on_publish_update_shadow)
+    #updateSettings()
+
+def updateSettings():
+    with open(config,"w") as filehandle:
+        config.write(filehandle)
 
 send_pour_topic = "send_pour"
 config_topic = "config_device"
 proxy_options = None
 received_count = 0
-
-
-# updates our device config if any updates come in from the UX (UX will be Alexa)
-def updateConfig():
-    global config
-    with open(config,"w") as filehandle:
-        config.write(filehandle)
-
-# update units if any updates come in from the UX (Alexa)
-def changeUnits(_units):
-    global shadow_properties
-    global units
-    units = _units
-    shadow_properties['units'] = units
-    updateConfig()
-
-# update pulses per litre if any updates come in from the UX (Alexa)
-def changePulses(_pulsesperlitre):
-    global shadow_properties
-    global pulsesperlitre
-    pulsesperlitre = _pulsesperlitre
-    shadow_properties['pulsesperlitre'] = pulsesperlitre
-    updateConfig()
-
-# update setting per stealth mode if any updates come in from the UX (Alexa)
-def setStealth(_stealth):
-    global stealth
-    global shadow_properties
-    stealth = _stealth
-    shadow_properties['stealth']=stealth
-    updateConfig()
 
 if __name__ == '__main__':
     print(endpoint)
