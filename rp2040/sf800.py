@@ -1,7 +1,8 @@
-from machine import Pin
+from machine import Pin, UART
 import utime
 
 #define hardware
+uart = UART(1,115200)
 led = Pin(25, Pin.OUT)
 swissflow = Pin(2,Pin.IN)
 
@@ -12,6 +13,12 @@ lastPulseCount = 0
 pulseCount = 0
 
 
+
+# our communications routine. uses UART serial.
+def sendData(data):
+    global uart
+    uart.write("Pulse count = {}\n".format(data))
+        
 # Our interuppt handler. we will increment our pulse counter and blink our led on detection of flow
 def irq_handler(pin):
     global pulseCount
@@ -43,6 +50,7 @@ while True:
         
         # transmit the data. right now just printing it.
         print(curPulseCount)
+        sendData(curPulseCount)
         
         # turn off interupts and clear the counter
         swissflow.irq(handler=None)
