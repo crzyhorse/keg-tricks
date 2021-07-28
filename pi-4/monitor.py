@@ -87,6 +87,7 @@ class LockedData:
 
 locked_data = LockedData()
 
+is_prog_done = threading.Event()
  
 def on_get_shadow_accepted(response):
     # type: (iotshadow.GetShadowResponse) -> None
@@ -237,6 +238,49 @@ config_topic = "config_device"
 proxy_options = None
 received_count = 0
 
+def flowmeter_input_thread_fn():
+    # set up serial port.
+    ser = serial.Serial('/dev/serial0',115200, timeout=1)
+    ser.flush()
+
+    while True:
+        try:
+            # get input from serial0. this will signal if a pour starts, and how much was poured.
+            serial_input = ''
+            new_values = {}
+            if ser.in_waiting > 0:
+                serial_input = ser.readline().decode('utf-8').rstrip()
+            if serial_input:
+                if serial_input.startswith("PourTotal:"):
+                    pStdErr(serial_input)
+                    pourAmount = int(serial_input.replace("PourTotal:",""))
+                    new_values = {
+                        'pouring' : False,
+                        'pour_amount' : pourAmount, 
+                        'datetime_of_pour' : time.time() 
+                    }
+                    print(pourAmount)
+                elif serial_input == 'PourStart':
+                    new_values = {
+                        'pouring' : True,
+                        'capturing_image' : True,
+                        'pour_id' : str(uuid4())
+                    }
+                    #callStartCapture()    
+                elif serial_input == 'capture_completed':
+                    new_values = {
+                        'capturing_image' : False,
+                    }
+                    pass # send image
+
+                    
+                change_shadow_values(new_values)
+            
+            time.sleep(1)
+            
+        except Exception as e:
+            print("Exception on input thread. {}".format(e))
+            
 if __name__ == '__main__':
     print(endpoint)
     print(cert)
@@ -245,10 +289,6 @@ if __name__ == '__main__':
     print(client_id)
     print(thing_name)
     print("starting")
-
-    # set up serial port.
-    ser = serial.Serial('/dev/serial0',115200, timeout=1)
-    ser.flush()
     
     # start AWS IOT logging to stderr
     # options are NoLogs, Fatal, Error, Warn, Info, Debug, Trace
@@ -283,7 +323,7 @@ if __name__ == '__main__':
 
     try:
         # Subscribe to necessary topics.
-        # Note that is **is** important to wait for "accepted/rejected" subscriptions
+        # Note that it **is** important to wait for "accepted/rejected" subscriptions
         # to succeed before publishing the corresponding "request".
         pStdErr("Subscribing to {} Shadow Update responses...".format(thing_name))
         update_accepted_subscribed_future, _ = shadow_client.subscribe_to_update_shadow_accepted(
@@ -344,15 +384,13 @@ if __name__ == '__main__':
         publish_get_future.result()
 
         #start our monitor loops
-        while True:
+        print("Launching thread to flowmeter input...")
+        flowmeter_input_thread = threading.Thread(target=flowmeter_input_thread_fn, name='flowmeter_input_thread')
+        flowmeter_input_thread.daemon = True
+        flowmeter_input_thread.start()
         
-            # get input from serial0. this will signal if a pour starts, and how much was poured.
-            serial_input = ''
-            if ser.in_waiting > 0:
-                serial_input = ser.readline().decode('utf-8').rstrip()
-                print(serial_input)
-            
-            time.sleep(1)
-
+        
     except Exception as e:
-        pStdErr(e.msg)
+        pStdErr(e)
+    
+    is_prog_done.wait()
